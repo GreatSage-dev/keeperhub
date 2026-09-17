@@ -402,7 +402,6 @@ function simulationFailureFromError(
     const classified = classifyRevert(error, contractInterface);
     const remediationInfo = getRemediationForRevert(classified, {
       target: to,
-      sender: from,
     });
 
     const code = remediationInfo?.reasonCode as SimulateFailureCode | undefined;
@@ -470,7 +469,6 @@ async function failureFromPreflightError(input: {
     const classified = classifyRevert(input.err, input.iface);
     const remediationInfo = getRemediationForRevert(classified, {
       target: input.to,
-      sender: input.from,
     });
 
     const code = remediationInfo?.reasonCode as SimulateFailureCode | undefined;

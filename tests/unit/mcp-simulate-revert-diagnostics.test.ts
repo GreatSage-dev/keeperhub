@@ -1,13 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { z } from "zod";
-
-if (typeof (z.ZodType.prototype as unknown as { nonoptional?: unknown }).nonoptional !== "function") {
-  (z.ZodType.prototype as unknown as { nonoptional: () => unknown }).nonoptional = function () {
-    return this;
-  };
-}
-
 import { SCOPE_MCP_WRITE } from "@/lib/mcp/oauth-scopes";
 import { registerTools } from "@/lib/mcp/tools";
 
@@ -181,7 +173,7 @@ const ALLOWANCE_BODY = JSON.stringify({
   revertReason:
     "ERC20InsufficientAllowance(0xspender00000000000000000000000000000001, 0, 1000000000000000000)",
   remediation:
-    "Call approve() on token contract 0xtoken000000000000000000000000000000000002 with spender 0xspender00000000000000000000000000000001 for at least 1000000000000000000 units before retrying this transaction.",
+    "Call approve() with spender 0xspender00000000000000000000000000000001 for at least 1000000000000000000 units before retrying this transaction.",
   error:
     "ERC20InsufficientAllowance(0xspender00000000000000000000000000000001, 0, 1000000000000000000)",
 });

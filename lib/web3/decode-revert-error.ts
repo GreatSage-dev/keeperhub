@@ -616,9 +616,9 @@ function classifyCommonError(
     case "ERC20InsufficientAllowance":
       return {
         kind: "erc20-insufficient-allowance",
-        spender: decoded.args.length > 0 ? String(decoded.args[0]) : undefined,
-        allowance: decoded.args.length > 1 ? String(decoded.args[1]) : "0",
-        needed: decoded.args.length > 2 ? String(decoded.args[2]) : "0",
+        spender: String(decoded.args[0]),
+        allowance: String(decoded.args[1]),
+        needed: String(decoded.args[2]),
       };
     case "OwnableUnauthorizedAccount":
       return { kind: "ownable-unauthorized", account: String(decoded.args[0]) };
@@ -659,6 +659,48 @@ export function classifyRevert(
     return { kind: "unknown" };
   }
 
+  // Handle built-in Error(string) and Panic(uint256) selectors before consulting
+  // contractInterface. ethers matches Error and Panic on every Interface instance,
+  // so consulting contractInterface first causes any ABI-carrying call to return
+  // { kind: "contract-custom", name: "Error" | "Panic" } instead of decoding them.
+  if (revertData.startsWith("0x08c379a0")) {
+    try {
+      const decoded = COMMON_ERRORS_INTERFACE.parseError(revertData);
+      if (decoded && decoded.args.length > 0) {
+        const reasonStr = String(decoded.args[0]);
+        const safeGs = extractSafeGsCode(reasonStr);
+        if (safeGs) {
+          return safeGs;
+        }
+        return { kind: "string-revert", reason: reasonStr };
+      }
+    } catch {
+      // not a standard Error(string)
+    }
+  }
+
+  if (revertData.startsWith("0x4e487b71")) {
+    try {
+      const decoded = COMMON_ERRORS_INTERFACE.parseError(revertData);
+      if (decoded && decoded.args.length > 0) {
+        const panicCode = Number(decoded.args[0]);
+        const panicInfo = SOLIDITY_PANIC_CODES[panicCode] ?? {
+          name: `Panic(${panicCode})`,
+          description: `Solidity panic code ${panicCode}`,
+          remediation: `Contract panicked with code ${panicCode}. Check input arguments and state.`,
+        };
+        return {
+          kind: "panic",
+          code: panicCode,
+          name: panicInfo.name,
+          description: panicInfo.description,
+        };
+      }
+    } catch {
+      // not a standard Panic(uint256)
+    }
+  }
+
   if (contractInterface) {
     try {
       const decoded = contractInterface.parseError(revertData);
@@ -689,32 +731,6 @@ export function classifyRevert(
   try {
     const decoded = COMMON_ERRORS_INTERFACE.parseError(revertData);
     if (decoded) {
-      // ethers' Interface.parseError matches the built-in `Error(string)`
-      // and `Panic(uint256)` selectors. Route Error(string) through the
-      // Safe-GS extractor + string-revert kind so callers get a useful
-      // discriminator instead of a misleading `contract-custom: "Error"`.
-      if (decoded.name === "Error" && decoded.args.length > 0) {
-        const reasonStr = String(decoded.args[0]);
-        const safeGs = extractSafeGsCode(reasonStr);
-        if (safeGs) {
-          return safeGs;
-        }
-        return { kind: "string-revert", reason: reasonStr };
-      }
-      if (decoded.name === "Panic" && decoded.args.length > 0) {
-        const panicCode = Number(decoded.args[0]);
-        const panicInfo = SOLIDITY_PANIC_CODES[panicCode] ?? {
-          name: `Panic(${panicCode})`,
-          description: `Solidity panic code ${panicCode}`,
-          remediation: `Contract panicked with code ${panicCode}. Check input arguments and state.`,
-        };
-        return {
-          kind: "panic",
-          code: panicCode,
-          name: panicInfo.name,
-          description: panicInfo.description,
-        };
-      }
       const common = classifyCommonError(decoded);
       if (common) {
         return common;
@@ -803,17 +819,16 @@ export type RevertRemediation = {
  */
 export function getRemediationForRevert(
   kind: RevertKind,
-  context?: { target?: string; sender?: string }
+  context?: { target?: string }
 ): RevertRemediation | null {
   switch (kind.kind) {
     case "erc20-insufficient-allowance": {
-      const targetStr = context?.target ? ` on token contract ${context.target}` : "";
       const spenderStr = kind.spender ? ` with spender ${kind.spender}` : "";
       const neededStr = kind.needed ? ` for at least ${kind.needed} units` : "";
       return {
         reasonCode: "insufficient_allowance",
         summary: `Token transfer or spend rejected: current allowance (${kind.allowance}) is less than needed (${kind.needed}).`,
-        remediation: `Call approve()${targetStr}${spenderStr}${neededStr} before retrying this transaction.`,
+        remediation: `Call approve()${spenderStr}${neededStr} before retrying this transaction.`,
       };
     }
     case "erc20-insufficient-balance": {
@@ -867,12 +882,11 @@ export function getRemediationForRevert(
     }
     case "panic": {
       const info = SOLIDITY_PANIC_CODES[kind.code];
-      const name = info?.name ?? `Panic(${kind.code})`;
-      const desc = info?.description ?? `Solidity panic code ${kind.code}`;
+      const codeSuffix = info ? kind.name.toLowerCase() : String(kind.code);
       const rem = info?.remediation ?? "Review input values and contract state.";
       return {
-        reasonCode: `panic_${name.toLowerCase()}`,
-        summary: `Contract execution panicked: ${name} (${desc}).`,
+        reasonCode: `panic_${codeSuffix}`,
+        summary: `Contract execution panicked: ${kind.name} (${kind.description}).`,
         remediation: rem,
       };
     }
@@ -908,8 +922,9 @@ export function getRemediationForRevert(
     case "string-revert": {
       const lower = kind.reason.toLowerCase();
       if (
-        lower.includes("exceeds balance") ||
-        lower.includes("insufficient balance")
+        lower === "erc20: transfer amount exceeds balance" ||
+        lower === "transfer amount exceeds balance" ||
+        lower === "insufficient balance"
       ) {
         return {
           reasonCode: "insufficient_token_balance",
@@ -919,19 +934,23 @@ export function getRemediationForRevert(
         };
       }
       if (
-        lower.includes("allowance") ||
-        lower.includes("approve")
+        lower === "erc20: transfer amount exceeds allowance" ||
+        lower === "erc20: insufficient allowance" ||
+        lower === "insufficient allowance" ||
+        lower === "allowance exceeded"
       ) {
-        const targetStr = context?.target
-          ? ` on token contract ${context.target}`
-          : "";
         return {
           reasonCode: "insufficient_allowance",
           summary: `Token spend rejected: ${kind.reason}.`,
-          remediation: `Call approve()${targetStr} to grant spending allowance before retrying this transaction.`,
+          remediation:
+            "Call approve() to grant spending allowance before retrying this transaction.",
         };
       }
-      if (lower.includes("paused")) {
+      if (
+        lower === "pausable: paused" ||
+        lower === "enforcedpause()" ||
+        lower === "expectedpause()"
+      ) {
         const targetStr = context?.target ? ` on ${context.target}` : "";
         return {
           reasonCode: "contract_paused",
@@ -941,9 +960,9 @@ export function getRemediationForRevert(
         };
       }
       if (
-        lower.includes("owner") ||
-        lower.includes("unauthorized") ||
-        lower.includes("not authorized")
+        lower === "ownable: caller is not the owner" ||
+        lower.startsWith("accesscontrol: account ") ||
+        lower === "not authorized"
       ) {
         return {
           reasonCode: "unauthorized",
@@ -952,7 +971,10 @@ export function getRemediationForRevert(
             "Switch to an authorized owner wallet or request ownership permissions.",
         };
       }
-      if (lower.includes("reentrant") || lower.includes("reentrancy")) {
+      if (
+        lower === "reentrancyguard: reentrant call" ||
+        lower === "reentrancy"
+      ) {
         return {
           reasonCode: "reentrancy_blocked",
           summary: `Execution rejected: ${kind.reason}.`,

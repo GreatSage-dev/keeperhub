@@ -309,6 +309,7 @@ type SimulateFailureShape = {
   code?: unknown;
   from?: unknown;
   to?: unknown;
+  remediation?: unknown;
 };
 
 /**
