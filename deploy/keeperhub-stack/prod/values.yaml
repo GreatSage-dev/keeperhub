@@ -51,12 +51,11 @@ app:
     EXECUTION_RETENTION_EXECUTIONS_ENABLED:
       type: kv
       value: "false"
-    # Report what each pass would touch and delete nothing. Prod stays disabled
-    # until staging has run for real: enable with dry-run on first, read the
-    # counts, then flip dry-run off.
+    # Real deletes. Set back to "true" to report what each pass would touch
+    # and delete nothing, without a code change.
     EXECUTION_RETENTION_DRY_RUN:
       type: kv
-      value: "true"
+      value: "false"
     # Ceiling on the no-join backstop pass. That pass runs at the longest
     # window any organization is actually on, capped here, so raising this
     # only bites once some plan sells a longer window than the value below.
@@ -1020,8 +1019,13 @@ app:
         concurrencyPolicy: Forbid
         successfulJobsHistoryLimit: 3
         failedJobsHistoryLimit: 3
-        restartPolicy: OnFailure
-        backoffLimit: 2
+        # No retries. A failed run already did its whole budget of work, and
+        # the next scheduled run resumes from the watermarks, so a retry only
+        # repeats that load on a day something is already wrong. Quoted on
+        # purpose: the chart renders `backoffLimit | default "6"`, and `default`
+        # treats a numeric 0 as empty, so an unquoted 0 would deploy as 6.
+        restartPolicy: Never
+        backoffLimit: "0"
 
 executor:
   enabled: true

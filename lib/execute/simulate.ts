@@ -24,6 +24,7 @@ import {
   extractRevertData,
   getRemediationForRevert,
 } from "@/lib/web3/decode-revert-error";
+import { buildErrorDecodeInterface } from "@/lib/web3/extra-error-abis";
 import {
   convertAmountForWrite,
   resolveForWrite,
@@ -201,6 +202,12 @@ export type SimulateContractCallInput = {
   functionArgs?: string;
   /** Decimal ETH (or native unit) value sent with the call. */
   value?: string;
+  /**
+   * #2430: extra ABI documents whose error entries join the decode path, after
+   * the target's own ABI. Encoding uses `abi` alone, so a fragment here can
+   * never change the calldata, only name a revert the target's ABI cannot.
+   */
+  errorAbis?: string[];
 };
 
 export type SimulateNativeTransferInput = {
@@ -232,7 +239,7 @@ export type SimulateTokenTransferInput = {
   decimals?: number;
 };
 
-type RpcManagerResolution =
+export type RpcManagerResolution =
   | { success: true; rpc: RpcProviderManager; chainId: number }
   | {
       success: false;
@@ -257,7 +264,7 @@ function serializeForJson(value: unknown): unknown {
   return value;
 }
 
-function failure(
+export function simulationFailure(
   from: string,
   to: string,
   value: bigint,
@@ -277,7 +284,7 @@ function failure(
   };
 }
 
-function unavailable(
+export function simulationUnavailable(
   from: string,
   to: string,
   value: bigint,
@@ -373,7 +380,7 @@ async function nativeShortfallFailure(input: {
       ? `${shortfall.message} The call also returned revert data no ABI here decodes (selector ${revertSelector(input.undecodedRevertData)}), so funding alone may not make it succeed.`
       : shortfall.message;
     return {
-      ...failure(input.from, input.to, input.value, message),
+      ...simulationFailure(input.from, input.to, input.value, message),
       code: shortfall.code,
       balanceWei: shortfall.balanceWei,
       requiredWei: shortfall.requiredWei,
@@ -405,7 +412,7 @@ function simulationFailureFromError(
     });
 
     const code = remediationInfo?.reasonCode as SimulateFailureCode | undefined;
-    const baseFailure = failure(from, to, value, decodedReason, "revert");
+    const baseFailure = simulationFailure(from, to, value, decodedReason, "revert");
 
     return {
       ...baseFailure,
@@ -431,10 +438,21 @@ function simulationFailureFromError(
   const message = getErrorMessage(error);
 
   if (failureKind === "unavailable") {
-    return unavailable(from, to, value, `Simulation unavailable: ${message}`);
+    return simulationUnavailable(
+      from,
+      to,
+      value,
+      `Simulation unavailable: ${message}`
+    );
   }
 
-  return failure(from, to, value, `Simulation failed: ${message}`, failureKind);
+  return simulationFailure(
+    from,
+    to,
+    value,
+    `Simulation failed: ${message}`,
+    failureKind
+  );
 }
 
 /** First four bytes of revert data: the selector an integrator can look up. */
@@ -472,7 +490,7 @@ async function failureFromPreflightError(input: {
     });
 
     const code = remediationInfo?.reasonCode as SimulateFailureCode | undefined;
-    const baseFailure = failure(
+    const baseFailure = simulationFailure(
       input.from,
       input.to,
       input.value,
@@ -520,7 +538,7 @@ async function failureFromPreflightError(input: {
 
   const failureKind = classifySimulationError(input.err);
   if (failureKind === "unavailable") {
-    return unavailable(
+    return simulationUnavailable(
       input.from,
       input.to,
       input.value,
@@ -534,13 +552,19 @@ async function failureFromPreflightError(input: {
       : `Simulation failed: ${originalError}`;
 
   return {
-    ...failure(input.from, input.to, input.value, message, failureKind),
+    ...simulationFailure(
+      input.from,
+      input.to,
+      input.value,
+      message,
+      failureKind
+    ),
     originalError,
     undecodedRevertData,
   };
 }
 
-async function getRpcManagerForChain(
+export async function getRpcManagerForChain(
   network: string
 ): Promise<RpcManagerResolution> {
   let chainId: number;
@@ -585,11 +609,11 @@ function rpcResolutionFailure(
   value: bigint
 ): SimulateFailure {
   return resolution.failureKind === "unavailable"
-    ? unavailable(from, to, value, resolution.error)
-    : failure(from, to, value, resolution.error);
+    ? simulationUnavailable(from, to, value, resolution.error)
+    : simulationFailure(from, to, value, resolution.error);
 }
 
-async function resolveSimulationWallet(
+export async function resolveSimulationWallet(
   organizationId: string,
   to: string,
   value: bigint
@@ -597,7 +621,7 @@ async function resolveSimulationWallet(
   try {
     return await getOrganizationWalletAddress(organizationId);
   } catch {
-    return unavailable(
+    return simulationUnavailable(
       "",
       to,
       value,
@@ -656,6 +680,87 @@ function parseValue(raw: string | undefined): bigint | string {
   }
 }
 
+/**
+ * Everything a simulated call needs before a node is involved: the value, the
+ * resolved fragment and the encoded calldata. Split out of
+ * `simulateContractCall` so a sequence of calls can be prepared without
+ * repeating the resolve-and-encode rules, which have to stay identical
+ * between the two paths or a bundle would encode differently from a single
+ * call of the same shape.
+ */
+export type PreparedSimulationCall = {
+  to: string;
+  value: bigint;
+  data: string;
+  iface: ethers.Interface;
+  canonicalKey: string;
+  abiFn: AbiItem;
+  args: readonly unknown[];
+};
+
+export function prepareSimulationCall(input: {
+  contractAddress: string;
+  abi: string;
+  functionName: string;
+  functionArgs?: string;
+  value?: string;
+}): PreparedSimulationCall | { error: string; value: bigint } {
+  const to = input.contractAddress;
+
+  const valueOrError = parseValue(input.value);
+  if (typeof valueOrError === "string") {
+    return { error: valueOrError, value: BigInt(0) };
+  }
+  const value = valueOrError;
+
+  const abiArrayOrError = parseAbiArray(input.abi);
+  if (typeof abiArrayOrError === "string") {
+    return { error: abiArrayOrError, value };
+  }
+  const abiArray = abiArrayOrError;
+
+  const resolution = resolveAbiFunction(
+    abiArray as AbiItem[],
+    input.functionName
+  );
+  if (resolution.status === "ambiguous") {
+    return {
+      error: describeAmbiguousKey(input.functionName, resolution.candidates),
+      value,
+    };
+  }
+  if (resolution.status !== "found") {
+    return { error: `Function ${input.functionName} not found in ABI`, value };
+  }
+  const abiFn = resolution.entry;
+
+  const argsOrError = parseFunctionArgs(input.functionArgs);
+  if (typeof argsOrError === "string") {
+    return { error: argsOrError, value };
+  }
+
+  try {
+    const iface = new ethers.Interface(abiArray as ethers.InterfaceAbi);
+    const coerced = coerceArgsForAbi(argsOrError, abiFn);
+    const reshaped = reshapeArgsForAbi(coerced, abiFn);
+    // Encode with the signature derived from the resolved entry, not with the
+    // key as supplied: an API or MCP caller may send the legacy raw spelling
+    // (`f(tuple)`), which resolves here but is not a fragment ethers accepts.
+    const data = iface.encodeFunctionData(resolution.canonicalKey, reshaped);
+    return {
+      to,
+      value,
+      data,
+      iface,
+      canonicalKey: resolution.canonicalKey,
+      abiFn,
+      args: argsOrError,
+    };
+  } catch (err) {
+    return { error: `Failed to encode call: ${getErrorMessage(err)}`, value };
+  }
+}
+
 export async function simulateContractCall(
   input: SimulateContractCallInput
 ): Promise<SimulateResult> {
@@ -670,63 +775,12 @@ export async function simulateContractCall(
   }
   const from = fromOrFailure;
 
-  const valueOrError = parseValue(input.value);
-  if (typeof valueOrError === "string") {
-    return failure(from, to, BigInt(0), valueOrError);
+  const prepared = prepareSimulationCall(input);
+  if ("error" in prepared) {
+    return simulationFailure(from, to, prepared.value, prepared.error);
   }
-  const value = valueOrError;
-
-  const abiArrayOrError = parseAbiArray(input.abi);
-  if (typeof abiArrayOrError === "string") {
-    return failure(from, to, value, abiArrayOrError);
-  }
-  const abiArray = abiArrayOrError;
-
-  const resolution = resolveAbiFunction(
-    abiArray as AbiItem[],
-    input.functionName
-  );
-  if (resolution.status === "ambiguous") {
-    return failure(
-      from,
-      to,
-      value,
-      describeAmbiguousKey(input.functionName, resolution.candidates)
-    );
-  }
-  if (resolution.status !== "found") {
-    return failure(
-      from,
-      to,
-      value,
-      `Function ${input.functionName} not found in ABI`
-    );
-  }
-  const abiFn = resolution.entry;
-
-  const argsOrError = parseFunctionArgs(input.functionArgs);
-  if (typeof argsOrError === "string") {
-    return failure(from, to, value, argsOrError);
-  }
-
-  let iface: ethers.Interface;
-  let encodedData: string;
-  try {
-    iface = new ethers.Interface(abiArray as ethers.InterfaceAbi);
-    const coerced = coerceArgsForAbi(argsOrError, abiFn);
-    const reshaped = reshapeArgsForAbi(coerced, abiFn);
-    // Encode with the signature derived from the resolved entry, not with the
-    // key as supplied: an API or MCP caller may send the legacy raw spelling
-    // (`f(tuple)`), which resolves here but is not a fragment ethers accepts.
-    encodedData = iface.encodeFunctionData(resolution.canonicalKey, reshaped);
-  } catch (err) {
-    return failure(
-      from,
-      to,
-      value,
-      `Failed to encode call: ${getErrorMessage(err)}`
-    );
-  }
+  const { value, data: encodedData, iface, canonicalKey, abiFn } = prepared;
+  const argsOrError = prepared.args;
 
   const rpcResolution = await getRpcManagerForChain(input.network);
   if (!rpcResolution.success) {
@@ -753,8 +807,13 @@ export async function simulateContractCall(
     context: "simulate",
   });
   if (stablecoinCap.kind !== "allowed") {
-    return failure(from, to, value, stablecoinCap.error);
+    return simulationFailure(from, to, value, stablecoinCap.error);
   }
+
+  // #2430: decoding gets its own interface. `iface` stays the one the call is
+  // encoded and its return value decoded with, so an extra document cannot
+  // reach either.
+  const decodeIface = buildErrorDecodeInterface(iface, input.errorAbis);
 
   const tx: ethers.TransactionRequest = { from, to, data: encodedData, value };
 
@@ -776,17 +835,14 @@ export async function simulateContractCall(
       to,
       value,
       err,
-      iface,
+      iface: decodeIface,
     });
   }
 
   let simulatedReturnValue: unknown = null;
   if (returnData && returnData !== "0x") {
     try {
-      const decoded = iface.decodeFunctionResult(
-        resolution.canonicalKey,
-        returnData
-      );
+      const decoded = iface.decodeFunctionResult(canonicalKey, returnData);
       simulatedReturnValue =
         decoded.length === 1 ? decoded[0] : Array.from(decoded);
     } catch {
@@ -822,7 +878,7 @@ export async function simulateNativeTransfer(
 
   const valueOrError = parseValue(input.amount);
   if (typeof valueOrError === "string") {
-    return failure(from, to, BigInt(0), valueOrError);
+    return simulationFailure(from, to, BigInt(0), valueOrError);
   }
   const value = valueOrError;
 
@@ -917,7 +973,7 @@ export async function simulateTokenTransfer(
       chainId
     );
   } catch {
-    return unavailable(
+    return simulationUnavailable(
       from,
       input.tokenAddress ?? "",
       BigInt(0),
@@ -925,7 +981,7 @@ export async function simulateTokenTransfer(
     );
   }
   if (!resolvedTokenAddress) {
-    return failure(
+    return simulationFailure(
       from,
       input.tokenAddress ?? "",
       BigInt(0),
@@ -934,7 +990,7 @@ export async function simulateTokenTransfer(
   }
 
   if (!ethers.isAddress(resolvedTokenAddress)) {
-    return failure(
+    return simulationFailure(
       from,
       resolvedTokenAddress,
       BigInt(0),
@@ -960,14 +1016,19 @@ export async function simulateTokenTransfer(
 
   const decimalsError = validateDecimals(decimals);
   if (decimalsError) {
-    return failure(from, resolvedTokenAddress, BigInt(0), decimalsError);
+    return simulationFailure(
+      from,
+      resolvedTokenAddress,
+      BigInt(0),
+      decimalsError
+    );
   }
 
   let amountUnits: bigint;
   try {
     amountUnits = ethers.parseUnits(input.amount, decimals);
   } catch {
-    return failure(
+    return simulationFailure(
       from,
       resolvedTokenAddress,
       BigInt(0),
@@ -986,7 +1047,7 @@ export async function simulateTokenTransfer(
     resolvedTokenAddress
   );
   if (!multiplier.ok) {
-    return failure(
+    return simulationFailure(
       from,
       resolvedTokenAddress,
       BigInt(0),
@@ -998,7 +1059,7 @@ export async function simulateTokenTransfer(
     multiplier.multiplier
   );
   if (!convertedAmount.ok) {
-    return failure(
+    return simulationFailure(
       from,
       resolvedTokenAddress,
       BigInt(0),
