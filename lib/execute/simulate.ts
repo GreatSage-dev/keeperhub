@@ -102,6 +102,7 @@ export type SimulateSuccess = {
 export const INSUFFICIENT_ALLOWANCE_CODE = "insufficient_allowance";
 export const INSUFFICIENT_TOKEN_BALANCE_CODE = "insufficient_token_balance";
 export const CONTRACT_PAUSED_CODE = "contract_paused";
+export const CONTRACT_NOT_PAUSED_CODE = "contract_not_paused";
 export const UNAUTHORIZED_CODE = "unauthorized";
 export const REENTRANCY_CODE = "reentrancy_blocked";
 export const SAFE_SIGNATURE_INVALID_CODE = "safe_signature_invalid";
@@ -121,6 +122,7 @@ export type SimulateFailureCode =
   | typeof INSUFFICIENT_ALLOWANCE_CODE
   | typeof INSUFFICIENT_TOKEN_BALANCE_CODE
   | typeof CONTRACT_PAUSED_CODE
+  | typeof CONTRACT_NOT_PAUSED_CODE
   | typeof UNAUTHORIZED_CODE
   | typeof REENTRANCY_CODE
   | typeof SAFE_SIGNATURE_INVALID_CODE

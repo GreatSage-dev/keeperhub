@@ -33,7 +33,7 @@ const API_500_RE = /^API call failed: 500/;
 // diagnostic lines in the rendered message.
 const FORGED_LINE_RE = /^Reason code: forged$/m;
 const REMEDIATION_SECTION_RE = /^Remediation:/m;
-const REMEDIATION_APPROVE_RE = /Call approve\(\)/;
+const REMEDIATION_ALLOWANCE_RE = /Allowance shortfall/;
 const ALLOWANCE_CODE_RE = /Reason code: insufficient_allowance/;
 const PAUSED_CODE_RE = /Reason code: contract_paused/;
 const PANIC_CODE_RE = /Reason code: panic_divisionbyzero/;
@@ -173,7 +173,7 @@ const ALLOWANCE_BODY = JSON.stringify({
   revertReason:
     "ERC20InsufficientAllowance(0xspender00000000000000000000000000000001, 0, 1000000000000000000)",
   remediation:
-    "Call approve() with spender 0xspender00000000000000000000000000000001 for at least 1000000000000000000 units before retrying this transaction.",
+    "Allowance shortfall: current allowance (0) is less than required (1000000000000000000) for spender 0xspender00000000000000000000000000000001. Grant additional spending allowance before retrying.",
   error:
     "ERC20InsufficientAllowance(0xspender00000000000000000000000000000001, 0, 1000000000000000000)",
 });
@@ -540,7 +540,7 @@ describe("MCP dry-run actionable agent remediation", () => {
     expect(message).toMatch(STAGE_SIMULATION_RE);
     expect(message).toMatch(ALLOWANCE_CODE_RE);
     expect(message).toMatch(REMEDIATION_SECTION_RE);
-    expect(message).toMatch(REMEDIATION_APPROVE_RE);
+    expect(message).toMatch(REMEDIATION_ALLOWANCE_RE);
     expect(message).toMatch(NEXT_STEP_RE);
   });
 

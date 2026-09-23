@@ -544,6 +544,7 @@ export type RevertKind =
       neededRole?: string;
     }
   | { kind: "paused" }
+  | { kind: "expected-pause" }
   | { kind: "reentrancy" }
   | {
       kind: "panic";
@@ -629,8 +630,9 @@ function classifyCommonError(
         neededRole: String(decoded.args[1]),
       };
     case "EnforcedPause":
-    case "ExpectedPause":
       return { kind: "paused" };
+    case "ExpectedPause":
+      return { kind: "expected-pause" };
     case "ReentrancyGuardReentrantCall":
       return { kind: "reentrancy" };
     case "NotAuthorized":
@@ -823,12 +825,11 @@ export function getRemediationForRevert(
 ): RevertRemediation | null {
   switch (kind.kind) {
     case "erc20-insufficient-allowance": {
-      const spenderStr = kind.spender ? ` with spender ${kind.spender}` : "";
-      const neededStr = kind.needed ? ` for at least ${kind.needed} units` : "";
+      const spenderStr = kind.spender ? ` for spender ${kind.spender}` : "";
       return {
         reasonCode: "insufficient_allowance",
         summary: `Token transfer or spend rejected: current allowance (${kind.allowance}) is less than needed (${kind.needed}).`,
-        remediation: `Call approve()${spenderStr}${neededStr} before retrying this transaction.`,
+        remediation: `Allowance shortfall: current allowance (${kind.allowance}) is less than required (${kind.needed})${spenderStr}. Grant additional spending allowance before retrying.`,
       };
     }
     case "erc20-insufficient-balance": {
@@ -845,6 +846,15 @@ export function getRemediationForRevert(
         summary: `Contract execution blocked: target contract${targetStr} is currently paused.`,
         remediation:
           "Wait for the contract owner to unpause the contract or invoke an unpause() action if authorized.",
+      };
+    }
+    case "expected-pause": {
+      const targetStr = context?.target ? ` on ${context.target}` : "";
+      return {
+        reasonCode: "contract_not_paused",
+        summary: `Contract execution blocked: operation requires target contract${targetStr} to be paused, but it is currently unpaused.`,
+        remediation:
+          "Contract must be paused to perform this operation. Pause the contract or verify execution prerequisites.",
       };
     }
     case "ownable-unauthorized": {
@@ -943,13 +953,12 @@ export function getRemediationForRevert(
           reasonCode: "insufficient_allowance",
           summary: `Token spend rejected: ${kind.reason}.`,
           remediation:
-            "Call approve() to grant spending allowance before retrying this transaction.",
+            "Allowance shortfall: the spender does not have sufficient allowance for this transfer amount. Grant additional spending allowance before retrying.",
         };
       }
       if (
         lower === "pausable: paused" ||
-        lower === "enforcedpause()" ||
-        lower === "expectedpause()"
+        lower === "enforcedpause()"
       ) {
         const targetStr = context?.target ? ` on ${context.target}` : "";
         return {
@@ -957,6 +966,15 @@ export function getRemediationForRevert(
           summary: `Contract execution blocked: target contract${targetStr} is paused (${kind.reason}).`,
           remediation:
             "Wait for the contract owner to unpause the contract or invoke an unpause() action if authorized.",
+        };
+      }
+      if (lower === "expectedpause()") {
+        const targetStr = context?.target ? ` on ${context.target}` : "";
+        return {
+          reasonCode: "contract_not_paused",
+          summary: `Contract execution blocked: operation requires target contract${targetStr} to be paused, but it is currently unpaused.`,
+          remediation:
+            "Contract must be paused to perform this operation. Pause the contract or verify execution prerequisites.",
         };
       }
       if (

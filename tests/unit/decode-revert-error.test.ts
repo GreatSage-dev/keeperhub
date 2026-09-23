@@ -213,6 +213,12 @@ describe("classifyRevert: common OZ errors", () => {
     expect(classifyRevert({ data })).toEqual({ kind: "paused" });
   });
 
+  it("classifies ExpectedPause as expected-pause", () => {
+    const iface = new ethers.Interface(["error ExpectedPause()"]);
+    const data = iface.encodeErrorResult("ExpectedPause", []);
+    expect(classifyRevert({ data })).toEqual({ kind: "expected-pause" });
+  });
+
   it("classifies ReentrancyGuardReentrantCall as reentrancy", () => {
     const iface = new ethers.Interface([
       "error ReentrancyGuardReentrantCall()",
@@ -370,7 +376,7 @@ describe("getRemediationForRevert: actionable agent remediation", () => {
     );
     expect(remediation).not.toBeNull();
     expect(remediation?.reasonCode).toBe("insufficient_allowance");
-    expect(remediation?.remediation).toContain("Call approve()");
+    expect(remediation?.remediation).toContain("Allowance shortfall");
     expect(remediation?.remediation).toContain(
       "0xspender00000000000000000000000000000001"
     );
@@ -388,6 +394,16 @@ describe("getRemediationForRevert: actionable agent remediation", () => {
     expect(remediation).not.toBeNull();
     expect(remediation?.reasonCode).toBe("contract_paused");
     expect(remediation?.remediation).toContain("unpause");
+  });
+
+  it("provides actionable remediation for expected-pause contracts", () => {
+    const remediation = getRemediationForRevert(
+      { kind: "expected-pause" },
+      { target: "0xcontract" }
+    );
+    expect(remediation).not.toBeNull();
+    expect(remediation?.reasonCode).toBe("contract_not_paused");
+    expect(remediation?.remediation).toContain("Contract must be paused");
   });
 
   it("provides actionable remediation for panics", () => {
@@ -409,7 +425,7 @@ describe("getRemediationForRevert: actionable agent remediation", () => {
     );
     expect(allowanceRem).not.toBeNull();
     expect(allowanceRem?.reasonCode).toBe("insufficient_allowance");
-    expect(allowanceRem?.remediation).toContain("Call approve()");
+    expect(allowanceRem?.remediation).toContain("Allowance shortfall");
 
     const balanceRem = getRemediationForRevert({
       kind: "string-revert",
@@ -424,6 +440,13 @@ describe("getRemediationForRevert: actionable agent remediation", () => {
     });
     expect(pausedRem).not.toBeNull();
     expect(pausedRem?.reasonCode).toBe("contract_paused");
+
+    const expectedPauseRem = getRemediationForRevert({
+      kind: "string-revert",
+      reason: "ExpectedPause()",
+    });
+    expect(expectedPauseRem).not.toBeNull();
+    expect(expectedPauseRem?.reasonCode).toBe("contract_not_paused");
 
     const ownerRem = getRemediationForRevert({
       kind: "string-revert",
