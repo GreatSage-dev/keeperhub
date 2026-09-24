@@ -365,15 +365,12 @@ describe("classifyRevert: Solidity Panic codes", () => {
 
 describe("getRemediationForRevert: actionable agent remediation", () => {
   it("provides actionable remediation for insufficient allowance", () => {
-    const remediation = getRemediationForRevert(
-      {
-        kind: "erc20-insufficient-allowance",
-        spender: "0xspender00000000000000000000000000000001",
-        allowance: "0",
-        needed: "1000000000000000000",
-      },
-      { target: "0xtoken00000000000000000000000000000002" }
-    );
+    const remediation = getRemediationForRevert({
+      kind: "erc20-insufficient-allowance",
+      spender: "0xspender00000000000000000000000000000001",
+      allowance: "0",
+      needed: "1000000000000000000",
+    });
     expect(remediation).not.toBeNull();
     expect(remediation?.reasonCode).toBe("insufficient_allowance");
     expect(remediation?.remediation).toContain("Allowance shortfall");
@@ -381,26 +378,17 @@ describe("getRemediationForRevert: actionable agent remediation", () => {
       "0xspender00000000000000000000000000000001"
     );
     expect(remediation?.remediation).toContain("1000000000000000000");
-    expect(remediation?.remediation).not.toContain(
-      "0xtoken00000000000000000000000000000002"
-    );
   });
 
   it("provides actionable remediation for paused contracts", () => {
-    const remediation = getRemediationForRevert(
-      { kind: "paused" },
-      { target: "0xcontract" }
-    );
+    const remediation = getRemediationForRevert({ kind: "paused" });
     expect(remediation).not.toBeNull();
     expect(remediation?.reasonCode).toBe("contract_paused");
     expect(remediation?.remediation).toContain("unpause");
   });
 
   it("provides actionable remediation for expected-pause contracts", () => {
-    const remediation = getRemediationForRevert(
-      { kind: "expected-pause" },
-      { target: "0xcontract" }
-    );
+    const remediation = getRemediationForRevert({ kind: "expected-pause" });
     expect(remediation).not.toBeNull();
     expect(remediation?.reasonCode).toBe("contract_not_paused");
     expect(remediation?.remediation).toContain("Contract must be paused");
@@ -409,7 +397,7 @@ describe("getRemediationForRevert: actionable agent remediation", () => {
   it("provides actionable remediation for panics", () => {
     const remediation = getRemediationForRevert({
       kind: "panic",
-      code: 0x12,
+      code: 18,
       name: "DivisionByZero",
       description: "Division or modulo by zero",
     });
@@ -419,10 +407,10 @@ describe("getRemediationForRevert: actionable agent remediation", () => {
   });
 
   it("provides actionable remediation for classic string reverts", () => {
-    const allowanceRem = getRemediationForRevert(
-      { kind: "string-revert", reason: "ERC20: transfer amount exceeds allowance" },
-      { target: "0xtoken" }
-    );
+    const allowanceRem = getRemediationForRevert({
+      kind: "string-revert",
+      reason: "ERC20: transfer amount exceeds allowance",
+    });
     expect(allowanceRem).not.toBeNull();
     expect(allowanceRem?.reasonCode).toBe("insufficient_allowance");
     expect(allowanceRem?.remediation).toContain("Allowance shortfall");

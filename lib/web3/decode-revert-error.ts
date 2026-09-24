@@ -43,58 +43,58 @@ export const SOLIDITY_PANIC_CODES: Record<
   number,
   { name: string; description: string; remediation: string }
 > = {
-  0x00: {
+  0: {
     name: "GenericCompilerPanic",
     description: "Generic compiler panic",
     remediation: "Check contract compilation and constructor invariants.",
   },
-  0x01: {
+  1: {
     name: "AssertFalse",
     description: "Assertion evaluated to false",
     remediation:
       "A contract invariant failed via assert(). Verify pre-conditions or state before retrying.",
   },
-  0x11: {
+  17: {
     name: "ArithmeticOverflowUnderflow",
     description:
       "Arithmetic operation underflowed or overflowed outside an unchecked block",
     remediation:
       "The transaction attempted a calculation that exceeded numeric bounds. Reduce amounts or check token decimals.",
   },
-  0x12: {
+  18: {
     name: "DivisionByZero",
     description: "Division or modulo by zero",
     remediation:
       "The contract attempted to divide by zero. Ensure denominator parameters or token prices are non-zero.",
   },
-  0x21: {
+  33: {
     name: "InvalidEnumValue",
     description: "Tried to convert a value into an enum that was out of bounds",
     remediation: "Ensure the enum option argument is within valid range.",
   },
-  0x22: {
+  34: {
     name: "StorageByteSliceOutOfBounds",
     description: "Access to incorrectly encoded storage byte array",
     remediation: "Storage layout mismatch or corrupted byte array.",
   },
-  0x31: {
+  49: {
     name: "EmptyArrayPop",
     description: "Called .pop() on an empty array",
     remediation:
       "Cannot pop elements from an empty array. Verify queue or list state.",
   },
-  0x32: {
+  50: {
     name: "ArrayOutOfBounds",
     description: "Array index out of bounds or negative slice index",
     remediation:
       "Array index out of bounds. Verify collection length before accessing the specified index.",
   },
-  0x41: {
+  65: {
     name: "OutOfMemory",
     description: "Allocated too much memory or memory pointer overflowed",
     remediation: "Memory limit exceeded. Reduce payload size or array lengths.",
   },
-  0x51: {
+  81: {
     name: "ZeroInitializedInternalFunction",
     description: "Called a zero-initialized variable of internal function type",
     remediation: "Uninitialized function pointer in smart contract.",
@@ -808,7 +808,6 @@ function extractSafeGsCode(
 
 export type RevertRemediation = {
   reasonCode: string;
-  summary: string;
   remediation: string;
 };
 
@@ -820,48 +819,39 @@ export type RevertRemediation = {
  * self-correct without human intervention.
  */
 export function getRemediationForRevert(
-  kind: RevertKind,
-  context?: { target?: string }
+  kind: RevertKind
 ): RevertRemediation | null {
   switch (kind.kind) {
     case "erc20-insufficient-allowance": {
       const spenderStr = kind.spender ? ` for spender ${kind.spender}` : "";
       return {
         reasonCode: "insufficient_allowance",
-        summary: `Token transfer or spend rejected: current allowance (${kind.allowance}) is less than needed (${kind.needed}).`,
         remediation: `Allowance shortfall: current allowance (${kind.allowance}) is less than required (${kind.needed})${spenderStr}. Grant additional spending allowance before retrying.`,
       };
     }
     case "erc20-insufficient-balance": {
       return {
         reasonCode: "insufficient_token_balance",
-        summary: `Token transfer rejected: balance (${kind.balance}) is less than needed (${kind.needed}).`,
         remediation: `Fund the sender account with at least ${kind.needed} tokens before retrying.`,
       };
     }
     case "paused": {
-      const targetStr = context?.target ? ` on ${context.target}` : "";
       return {
         reasonCode: "contract_paused",
-        summary: `Contract execution blocked: target contract${targetStr} is currently paused.`,
         remediation:
           "Wait for the contract owner to unpause the contract or invoke an unpause() action if authorized.",
       };
     }
     case "expected-pause": {
-      const targetStr = context?.target ? ` on ${context.target}` : "";
       return {
         reasonCode: "contract_not_paused",
-        summary: `Contract execution blocked: operation requires target contract${targetStr} to be paused, but it is currently unpaused.`,
         remediation:
           "Contract must be paused to perform this operation. Pause the contract or verify execution prerequisites.",
       };
     }
     case "ownable-unauthorized": {
-      const acc = kind.account ? ` Account ${kind.account}` : " Caller";
       return {
         reasonCode: "unauthorized",
-        summary: `Execution rejected: OwnableUnauthorizedAccount.${acc} is not the contract owner.`,
         remediation:
           "Switch to an authorized owner wallet or request ownership permissions.",
       };
@@ -871,21 +861,18 @@ export function getRemediationForRevert(
       const role = kind.neededRole ? ` role ${kind.neededRole}` : " required role";
       return {
         reasonCode: "unauthorized",
-        summary: `Execution rejected: AccessControlUnauthorizedAccount.${acc} is missing${role}.`,
         remediation: `Grant${role} to${acc} before executing this function.`,
       };
     }
     case "role-not-authorized": {
       return {
         reasonCode: "unauthorized",
-        summary: "Execution rejected: caller is not authorized.",
         remediation: "Verify caller permissions and role membership.",
       };
     }
     case "reentrancy": {
       return {
         reasonCode: "reentrancy_blocked",
-        summary: "Execution rejected: ReentrancyGuard triggered.",
         remediation:
           "Avoid nested or recursive calls to this function in the same transaction.",
       };
@@ -896,14 +883,12 @@ export function getRemediationForRevert(
       const rem = info?.remediation ?? "Review input values and contract state.";
       return {
         reasonCode: `panic_${codeSuffix}`,
-        summary: `Contract execution panicked: ${kind.name} (${kind.description}).`,
         remediation: rem,
       };
     }
     case "safe-signature-invalid": {
       return {
         reasonCode: "safe_signature_invalid",
-        summary: `Safe transaction rejected: ${kind.description} (${kind.gsCode}).`,
         remediation:
           "Check Safe signer signatures, threshold, and signature ordering.",
       };
@@ -911,21 +896,18 @@ export function getRemediationForRevert(
     case "safe-insufficient-gas": {
       return {
         reasonCode: "safe_insufficient_gas",
-        summary: `Safe transaction rejected: ${kind.description} (${kind.gsCode}).`,
         remediation: "Increase gas limit for Safe execution.",
       };
     }
     case "safe-not-authorized": {
       return {
         reasonCode: "safe_not_authorized",
-        summary: `Safe transaction rejected: ${kind.description} (${kind.gsCode}).`,
         remediation: "Ensure the caller is an owner or enabled module of the Safe.",
       };
     }
     case "role-condition-violation": {
       return {
         reasonCode: "role_condition_violation",
-        summary: `Zodiac Roles condition violation: ${kind.status} (${kind.paramOrKey}).`,
         remediation: `Adjust call parameters to comply with role restriction: ${kind.status}.`,
       };
     }
@@ -938,7 +920,6 @@ export function getRemediationForRevert(
       ) {
         return {
           reasonCode: "insufficient_token_balance",
-          summary: `Token transfer rejected: ${kind.reason}.`,
           remediation:
             "Fund the sender account with sufficient token balance before retrying.",
         };
@@ -951,28 +932,20 @@ export function getRemediationForRevert(
       ) {
         return {
           reasonCode: "insufficient_allowance",
-          summary: `Token spend rejected: ${kind.reason}.`,
           remediation:
             "Allowance shortfall: the spender does not have sufficient allowance for this transfer amount. Grant additional spending allowance before retrying.",
         };
       }
-      if (
-        lower === "pausable: paused" ||
-        lower === "enforcedpause()"
-      ) {
-        const targetStr = context?.target ? ` on ${context.target}` : "";
+      if (lower === "pausable: paused" || lower === "enforcedpause()") {
         return {
           reasonCode: "contract_paused",
-          summary: `Contract execution blocked: target contract${targetStr} is paused (${kind.reason}).`,
           remediation:
             "Wait for the contract owner to unpause the contract or invoke an unpause() action if authorized.",
         };
       }
       if (lower === "expectedpause()") {
-        const targetStr = context?.target ? ` on ${context.target}` : "";
         return {
           reasonCode: "contract_not_paused",
-          summary: `Contract execution blocked: operation requires target contract${targetStr} to be paused, but it is currently unpaused.`,
           remediation:
             "Contract must be paused to perform this operation. Pause the contract or verify execution prerequisites.",
         };
@@ -984,7 +957,6 @@ export function getRemediationForRevert(
       ) {
         return {
           reasonCode: "unauthorized",
-          summary: `Execution rejected: ${kind.reason}.`,
           remediation:
             "Switch to an authorized owner wallet or request ownership permissions.",
         };
@@ -995,7 +967,6 @@ export function getRemediationForRevert(
       ) {
         return {
           reasonCode: "reentrancy_blocked",
-          summary: `Execution rejected: ${kind.reason}.`,
           remediation:
             "Avoid nested or recursive calls to this function in the same transaction.",
         };

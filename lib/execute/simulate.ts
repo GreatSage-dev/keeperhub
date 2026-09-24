@@ -409,12 +409,16 @@ function simulationFailureFromError(
 
   if (decodedReason) {
     const classified = classifyRevert(error, contractInterface);
-    const remediationInfo = getRemediationForRevert(classified, {
-      target: to,
-    });
+    const remediationInfo = getRemediationForRevert(classified);
 
     const code = remediationInfo?.reasonCode as SimulateFailureCode | undefined;
-    const baseFailure = simulationFailure(from, to, value, decodedReason, "revert");
+    const baseFailure = simulationFailure(
+      from,
+      to,
+      value,
+      decodedReason,
+      "revert"
+    );
 
     return {
       ...baseFailure,
@@ -487,9 +491,7 @@ async function failureFromPreflightError(input: {
   const reason = decodeRevertReason(input.err, input.iface);
   if (reason) {
     const classified = classifyRevert(input.err, input.iface);
-    const remediationInfo = getRemediationForRevert(classified, {
-      target: input.to,
-    });
+    const remediationInfo = getRemediationForRevert(classified);
 
     const code = remediationInfo?.reasonCode as SimulateFailureCode | undefined;
     const baseFailure = simulationFailure(
